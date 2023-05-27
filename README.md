@@ -1,92 +1,127 @@
 # generative-image-to-text
 
+Model
+- Vision encoder: CLIP(ResNet50, ViT-L/14)
+- Language Model: GPT-2, OPT-2.7B, LLaMA-7B(8bit Quantization)
+ 
+Data
+- Conceptual Captions (3.3M)
+- LAION-400M
 
+## How to use
 
-## Getting started
+### Set up
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+``` 
+sudo singularity build container.sif container.def
+``` 
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+Run the container:
 
-## Add your files
+``` 
+singularity exec container.sif 'my-command'
+``` 
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/ee/gitlab-basics/add-file.html#add-a-file-using-the-command-line) or push an existing Git repository with the following command:
+### Prepare Dataset
 
-```
-cd existing_repo
-git remote add origin https://gitlab.com/ut-vision/sugano-lab/kevinxu/generative-image-to-text.git
-git branch -M main
-git push -uf origin main
-```
+Download tsv file from https://ai.google.com/research/ConceptualCaptions/.
 
-## Integrate with your tools
+Note: Delete suspicious URLs from tsv file
+- this was the official uniform .	~://dstormer6em3i4km.onion.link/wp-content/uploads/2015/03/US-Forest-Ranger-Nazi-819x1024.jpg
+- i hate to tell you this dear , but whoever told you that was lying to make you feel better .	~//dstormer6em3i4km.onion.link/wp-content/uploads/2014/05/pretty-for-a-dark-skinned-girl.jpg
 
-- [ ] [Set up project integrations](https://gitlab.com/ut-vision/sugano-lab/kevinxu/generative-image-to-text/-/settings/integrations)
+Download images:
+``` 
+python download.py --data_root <tsv_path>
+``` 
+Notice, downloading the images might take a few days.
 
-## Collaborate with your team
+### Training
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Automatically merge when pipeline succeeds](https://docs.gitlab.com/ee/user/project/merge_requests/merge_when_pipeline_succeeds.html)
+Train gpt-large on single V100 24G GPU:
+``` 
+torchrun --nnodes=1 --nproc_per_node=1 train.py \
+    --epochs 5 \
+    --bs 32 \
+    -iet ViT-B/32 \
+    -lm gpt2-large \
+    -mpt mlp \
+    --lr 2e-5 \
+    -ws 5000 \
+    --output_dir checkpoints/vitb32_gpt2l
+``` 
 
-## Test and Deploy
+Use 4 V100 32G GPUs:
+``` 
+CUDA_VISIBLE_DEVICES=3,4,8,9 torchrun --nnodes=1 --nproc_per_node=4 train.py --epochs 2 --bs 10 -iet ViT-B/16 -lm decapoda-research/llama-7b-hf --output_gird False -mpt mlp --lr 1e-5 -ws 5000 --output_dir checkpoints/vit-llama-8bit
+``` 
 
-Use the built-in continuous integration in GitLab.
+### Inference
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/index.html)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing(SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+Inference on a single image:
+``` 
+# single image, captioning
+python3 inference.py -p "{'type': 'test_git_inference_single_image', \
+      'image_encoder_type': 'ViT-B/32', \
+      'language_model': 'gpt2-large', \
+      'mapping_type': 'mlp', \
+      'output_grid': False, \
+      'input_resolution': 224, \
+      'model_path': 'checkpoints/vitb32_gpt2l/model-004.pt', \
+      'image_path': 'images/cartoon.jpg', \
+      'prompt': '', \
+}"
 
-***
+# single image, question answering
+python3 inference.py -p "{'type': 'test_git_inference_single_image', \
+      'image_path': 'images/cartoon.jpg', \
+      'model_path': 'checkpoints/RN50_OPT2.7B_CC3M/model_latest.pt', \
+      'prompt': 'What is a dinosaur holding?', \
+}"
+``` 
 
-# Editing this README
+### Evaluating
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thank you to [makeareadme.com](https://www.makeareadme.com/) for this template.
+#### Captioning
 
-## Suggestions for a good README
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+1. Inference on COCO Karpathy test.
+``` 
+python3 inference.py -p "{'type': 'test_git_inference_single_tsv', \
+    'image_tsv': 'data/coco_caption/test.img.tsv', \
+    'model_path': 'checkpoints/llama-8bit/model_lates.pt', \
+    'question_tsv': null, \
+    'out_tsv': 'inference/LLaMA-8bit_COCO/coco.tsv', \
+}"
+``` 
+2. Calculate the evaluation metric
+``` 
+python3 inference.py -p "{'type': 'evaluate_on_coco_caption', \
+      'res_file': 'inference/LLaMA-8bit_COCO/coco.tsv', \
+      'label_file': 'data/coco_caption/test.caption.tsv', \
+}"
+``` 
 
-## Name
-Choose a self-explaining name for your project.
+#### VQA
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+1. Inference on vqa test
+``` 
+python3 inference.py -p "{'type': 'test_git_inference_single_tsv', \
+      'image_tsv': 'data/TaxVQAv2/test.tsv', \
+      'model_path': 'checkpoints/llama-8bit/model_lates.pt', \
+      'question_tsv': 'data/TaxVQAv2/test.caption.tsv', \
+      'out_tsv': 'inference/LLaMA-8bit_VQAv2/snapshot/vqav2.tsv', \
+}"
+``` 
+2. Convert the output tsv to the json format for submission to [evalai](https://eval.ai/web/challenges/challenge-page/830/overview)
+``` 
+python3 inference.py -p "{'type': 'convert_tsv_to_vqa_json', \
+      'predict_file': 'inference/LLaMA-8bit_VQAv2/snapshot/vqav2.tsv', \
+      'out_json': 'inference/LLaMA-8bit_VQAv2/snapshot/vqav2.json', \
+}"
+``` 
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+#### Results
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+|  Models  |  COCO (CIDEr)  | VQAv2 (VQA accuracy) |
+| ---- | ---- | ---- |
+|  ViT-L/14_notgrid_mlp_LLaMA8bit |  TD  | TD |
