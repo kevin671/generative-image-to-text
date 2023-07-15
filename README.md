@@ -2,8 +2,8 @@
 
 Model
 
-- Vision encoder: CLIP(ResNet50, ViT-L/14)
-- Language Model: GPT-2, OPT-2.7B, LLaMA-7B(8bit Quantization)
+- Vision encoder: CLIP
+- Language Model: GPT-2, OPT-2.7B, LLaMA-7B(8bit)
 
 Data
 
@@ -132,9 +132,3 @@ python3 inference.py -p "{'type': 'convert_tsv_to_vqa_json', \
       'out_json': 'inference/LLaMA-8bit_VQAv2/snapshot/vqav2.json', \
 }"
 ```
-
-#### Results
-
-| Models                         | COCO (CIDEr) | VQAv2 (VQA accuracy) |
-| ------------------------------ | ------------ | -------------------- |
-| ViT-L/14_notgrid_mlp_LLaMA8bit | TD           | TD                   |
